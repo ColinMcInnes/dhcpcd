@@ -3154,7 +3154,7 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
 			logdebugx("%s: validated using 0x%08" PRIu32, ifp->name,
 			    state->auth.token->secretid);
 		else
-			loginfox("%s: accepted reconfigure key", ifp->name);
+			logdebugx("%s: accepted reconfigure key", ifp->name);
 	}
 #endif
 
@@ -3227,7 +3227,7 @@ dhcp_handledhcp(struct interface *ifp, struct bootp *bootp, size_t bootp_len,
 				logdebugx("%s: validated using 0x%08" PRIu32,
 				    ifp->name, state->auth.token->secretid);
 			else
-				loginfox("%s: accepted reconfigure key",
+				logdebugx("%s: accepted reconfigure key",
 				    ifp->name);
 		} else if (ifo->auth.options & DHCPCD_AUTH_SEND) {
 			if (ifo->auth.options & DHCPCD_AUTH_REQUIRE) {

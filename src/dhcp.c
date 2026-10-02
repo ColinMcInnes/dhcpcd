@@ -57,6 +57,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <time.h>
 #include <unistd.h>
 
 #define ELOOP_QUEUE ELOOP_DHCP
@@ -4390,6 +4391,89 @@ dhcp_handleifa(int cmd, struct ipv4_addr *ia, pid_t pid)
 }
 
 #ifndef SMALL
+static int
+dhcp_dump_lease_time(FILE *fp, const char *name, struct eloop *eloop,
+    void (*callback)(void *), void *arg, time_t *now, uint32_t lifetime,
+    bool privsep)
+{
+	unsigned int seconds;
+	int has;
+	time_t when;
+	struct tm tm;
+	char buf[32];
+	char *ts;
+
+	if (lifetime == DHCP_INFINITE_LIFETIME)
+		return script_envtime(fp, name, "never");
+
+	has = eloop_timeout_remaining(eloop, callback, arg, &seconds);
+	if (has == -1) {
+		logerrx("Could not get remaining dhcp4 lease time");
+		return -1;
+	}
+	if (has == 0)
+		return script_envtime(fp, name, "expired");
+
+	when = *now + (time_t)seconds;
+	if (!privsep) {
+		ts = ctime(&when);
+		if (ts == NULL) {
+			logerrx("Could not convert dhcp4 lease time");
+			return -1;
+		}
+		return script_envtime(fp, name, ts);
+	}
+	/* if using privsep, use gmtime and convert the time to a string in the
+	 * UTC */
+	if (gmtime_r(&when, &tm) == NULL) {
+		logerrx("Could not convert dhcp4 lease time");
+		return -1;
+	}
+	if (strftime(buf, sizeof(buf), "%a %b %e %H:%M:%S %Y UTC", &tm) == 0) {
+		logerrx("Could not format dhcp4 lease time");
+		return -1;
+	}
+	return script_envtime(fp, name, buf);
+}
+
+int
+dhcp_dump_lease_times(FILE *fp, const struct interface *ifp)
+{
+	const struct dhcp_state *state;
+	const struct dhcp_lease *lease;
+	void *arg;
+	time_t now;
+
+	state = D_CSTATE(ifp);
+	if (state == NULL)
+		return 0;
+	if (state->state != DHS_BOUND && state->state != DHS_RENEW &&
+	    state->state != DHS_REBIND)
+		return 0;
+
+	now = time(NULL);
+	if (now == (time_t)-1) {
+		logerrx("Could not get current time");
+		return -1;
+	}
+
+	lease = &state->lease;
+	arg = UNCONST(ifp);
+	if (dhcp_dump_lease_time(fp, "next_renewal_time", ifp->ctx->eloop,
+		dhcp_startrenew, arg, &now, lease->renewaltime,
+		IN_PRIVSEP(ifp->ctx)) == -1)
+		return -1;
+	if (dhcp_dump_lease_time(fp, "next_rebind_time", ifp->ctx->eloop,
+		dhcp_rebind, arg, &now, lease->rebindtime,
+		IN_PRIVSEP(ifp->ctx)) == -1)
+		return -1;
+	if (dhcp_dump_lease_time(fp, "next_expire_time", ifp->ctx->eloop,
+		dhcp_expire, arg, &now, lease->leasetime,
+		IN_PRIVSEP(ifp->ctx)) == -1)
+		return -1;
+	return 0;
+}
+
 int
 dhcp_dump(struct interface *ifp)
 {

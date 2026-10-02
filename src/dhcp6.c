@@ -44,6 +44,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <syslog.h>
+#include <time.h>
 #include <unistd.h>
 
 #define ELOOP_QUEUE ELOOP_DHCP6
@@ -4511,6 +4512,91 @@ delegated:
 
 	return 1;
 }
+
+#ifndef SMALL
+static int
+dhcp6_dump_lease_time(FILE *fp, const char *name, struct eloop *eloop,
+    void (*callback)(void *), void *arg, time_t *now, uint32_t lifetime,
+    bool privsep)
+{
+	unsigned int seconds;
+	int has;
+	time_t when;
+	struct tm tm;
+	char buf[32];
+	char *ts;
+
+	if (lifetime == ND6_INFINITE_LIFETIME)
+		return script_envtime(fp, name, "never");
+
+	has = eloop_timeout_remaining(eloop, callback, arg, &seconds);
+	if (has == -1) {
+		logerrx("Could not get remaining dhcp6 lease time");
+		return -1;
+	}
+	if (has == 0)
+		return script_envtime(fp, name, "expired");
+
+	when = *now + (time_t)seconds;
+	if (!privsep) {
+		/* if not using privsep, we can take advantage of ctime
+		 * formatting */
+		ts = ctime(&when);
+		if (ts == NULL) {
+			logerrx("Could not convert dhcp6 lease time");
+			return -1;
+		}
+		return script_envtime(fp, name, ts);
+	}
+	/* if using privsep, use gmtime and convert the time to a string in the
+	 * UTC */
+	if (gmtime_r(&when, &tm) == NULL) {
+		logerrx("Could not convert dhcp6 lease time");
+		return -1;
+	}
+	if (strftime(buf, sizeof(buf), "%a %b %e %H:%M:%S %Y UTC", &tm) == 0) {
+		logerrx("Could not format dhcp6 lease time");
+		return -1;
+	}
+	return script_envtime(fp, name, buf);
+}
+
+int
+dhcp6_dump_lease_times(FILE *fp, const struct interface *ifp)
+{
+	const struct dhcp6_state *state;
+	void *arg;
+	time_t now;
+
+	state = D6_CSTATE(ifp);
+	if (state == NULL)
+		return 0;
+	if (state->state != DH6S_BOUND && state->state != DH6S_RENEW &&
+	    state->state != DH6S_REBIND)
+		return 0;
+
+	now = time(NULL);
+	if (now == (time_t)-1) {
+		logerrx("Could not get current time");
+		return -1;
+	}
+
+	arg = UNCONST(ifp);
+	if (dhcp6_dump_lease_time(fp, "next_renewal_time", ifp->ctx->eloop,
+		dhcp6_startrenew, arg, &now, state->renew,
+		IN_PRIVSEP(ifp->ctx)) == -1)
+		return -1;
+	if (dhcp6_dump_lease_time(fp, "next_rebind_time", ifp->ctx->eloop,
+		dhcp6_startrebind, arg, &now, state->rebind,
+		IN_PRIVSEP(ifp->ctx)) == -1)
+		return -1;
+	if (dhcp6_dump_lease_time(fp, "next_expire_time", ifp->ctx->eloop,
+		dhcp6_startexpire, arg, &now, state->expire,
+		IN_PRIVSEP(ifp->ctx)) == -1)
+		return -1;
+	return 0;
+}
+#endif
 #endif
 
 #ifndef SMALL
